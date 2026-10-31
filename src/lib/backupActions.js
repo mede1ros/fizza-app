@@ -11,12 +11,12 @@ export async function exportBackup() {
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title: 'Backup do Fizza' });
+      await db.setMeta('last_backup_at', now.toISOString());
+      return 'shared';
     } catch (error) {
       if (error?.name === 'AbortError') return 'cancelled';
-      throw error;
+      // O iOS pode recusar (ex.: NotAllowedError ao perder o gesto do toque): baixa o arquivo.
     }
-    await db.setMeta('last_backup_at', now.toISOString());
-    return 'shared';
   }
 
   const url = URL.createObjectURL(file);

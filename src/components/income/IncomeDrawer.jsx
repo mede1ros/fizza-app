@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { db } from '@/api/db';
 import { formatMoney, parseMoney, centsToInput } from '@/domain/money';
-import { formatDateBR, todayISO, currentMonth } from '@/domain/months';
+import { formatDateBR, todayISO, currentMonth, addMonths } from '@/domain/months';
 import { incomeActiveInMonth } from '@/domain/finance';
 import FormSheet from '@/components/FormSheet';
 import MoneyInput from '@/components/MoneyInput';
@@ -28,7 +28,16 @@ function IncomeForm({ initial, month, onSaved, onCancel }) {
   const onError = () => toast({ title: 'Não foi possível salvar', variant: 'destructive' });
 
   const save = useMutation({
-    mutationFn: (data) => (isEdit ? db.entities.Income.update(initial.id, data) : db.entities.Income.create(data)),
+    mutationFn: async (data) => {
+      if (!isEdit) return db.entities.Income.create(data);
+      // Mudar o valor de uma entrada fixa vale a partir do mês aberto: os meses anteriores mantêm o valor antigo.
+      const fromLaterMonth = initial.kind === 'fixed' && data.kind === 'fixed' && initial.start_month < month;
+      if (fromLaterMonth && data.amount_cents !== initial.amount_cents) {
+        await db.entities.Income.update(initial.id, { end_month: addMonths(month, -1) });
+        return db.entities.Income.create({ ...data, start_month: month });
+      }
+      return db.entities.Income.update(initial.id, data);
+    },
     onSuccess: done,
     onError,
   });

@@ -74,6 +74,42 @@ test('adicionar entrada avulsa pelo cartão de renda', async () => {
   await waitFor(() => expect(screen.getByTestId('card-renda')).toHaveTextContent('R$ 300,00'));
 });
 
+test('aumento de salário vale a partir do mês aberto, sem mudar meses passados', async () => {
+  const user = userEvent.setup();
+  await db.entities.Income.create({ name: 'Salário', kind: 'fixed', amount_cents: 500000, start_month: '2026-09', end_month: null });
+  renderPage(<Dashboard />, { month: '2026-11' });
+  await user.click(screen.getByRole('button', { name: 'Ver entradas de renda' }));
+  const sheet = await screen.findByRole('dialog');
+  await user.click(await within(sheet).findByRole('button', { name: /Salário/ }));
+  const valor = within(sheet).getByLabelText('Valor');
+  await user.clear(valor);
+  await user.type(valor, '6.000');
+  await user.click(within(sheet).getByRole('button', { name: 'Salvar' }));
+  await waitFor(async () => {
+    const list = await db.entities.Income.list('start_month');
+    expect(list).toEqual([
+      expect.objectContaining({ amount_cents: 500000, start_month: '2026-09', end_month: '2026-10' }),
+      expect.objectContaining({ amount_cents: 600000, start_month: '2026-11', end_month: null }),
+    ]);
+  });
+});
+
+test('editar entrada fixa no próprio mês de início só atualiza', async () => {
+  const user = userEvent.setup();
+  await db.entities.Income.create({ name: 'Salário', kind: 'fixed', amount_cents: 500000, start_month: '2026-11', end_month: null });
+  renderPage(<Dashboard />, { month: '2026-11' });
+  await user.click(screen.getByRole('button', { name: 'Ver entradas de renda' }));
+  const sheet = await screen.findByRole('dialog');
+  await user.click(await within(sheet).findByRole('button', { name: /Salário/ }));
+  const valor = within(sheet).getByLabelText('Valor');
+  await user.clear(valor);
+  await user.type(valor, '5.100');
+  await user.click(within(sheet).getByRole('button', { name: 'Salvar' }));
+  await waitFor(async () => {
+    expect(await db.entities.Income.list()).toEqual([expect.objectContaining({ amount_cents: 510000, start_month: '2026-11' })]);
+  });
+});
+
 test('entrada fixa começa no mês selecionado', async () => {
   const user = userEvent.setup();
   renderPage(<Dashboard />, { month: '2026-11' });

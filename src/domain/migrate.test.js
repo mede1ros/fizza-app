@@ -21,6 +21,20 @@ test('migra gasto, fixo pago, renda e categorias', () => {
   v2.Category.forEach((c) => expect(typeof c.id).toBe('string'));
 });
 
+test('fixo migrado nunca começa depois do mês em que foi pago', () => {
+  const v2 = migrateV1ToV2({
+    RecurringExpense: [{ id: 'r', amount: 50, due_day: 31, is_paid_this_month: true, paid_month_year: '2026-10', created_date: '2026-11-05T00:00:00Z' }],
+  });
+  expect(v2.RecurringExpense[0].start_month).toBe('2026-10');
+  expect(v2.RecurringExpense[0].payments['2026-10']).toBeTruthy();
+});
+
+test('início do fixo migrado usa o mês local da criação', () => {
+  const created = new Date(2026, 9, 31, 22, 0); // 31/10 22h no fuso local
+  const v2 = migrateV1ToV2({ RecurringExpense: [{ id: 'r', amount: 50, due_day: 5, created_date: created.toISOString() }] });
+  expect(v2.RecurringExpense[0].start_month).toBe('2026-10');
+});
+
 test('gasto v1 sem data usa o dia 1 do month_year', () => {
   expect(migrateV1ToV2({ Expense: [{ amount: 1, category: 'X', month_year: '2026-08' }] }).Expense[0].date).toBe('2026-08-01');
 });

@@ -61,6 +61,18 @@ test('cancelar o compartilhamento não registra backup', async () => {
   expect(await db.getMeta('last_backup_at')).toBeUndefined();
 });
 
+test('se o iPhone recusar o compartilhamento, baixa o arquivo', async () => {
+  navigator.canShare = () => true;
+  navigator.share = vi.fn().mockRejectedValue(new DOMException('gesto perdido', 'NotAllowedError'));
+  URL.createObjectURL = vi.fn(() => 'blob:fizza');
+  URL.revokeObjectURL = vi.fn();
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  expect(await exportBackup()).toBe('downloaded');
+  expect(click).toHaveBeenCalled();
+  expect(await db.getMeta('last_backup_at')).toBeTruthy();
+  click.mockRestore();
+});
+
 test('apagar tudo exige digitar APAGAR', async () => {
   const user = userEvent.setup();
   await db.entities.Expense.create({ name: 'X', amount_cents: 100, category: 'Outros', date: '2026-10-01' });

@@ -1,6 +1,6 @@
 // Conversão dos dados da versão 1 (localStorage, valores em reais) para a versão 2.
 import { DEFAULT_CATEGORIES } from './categories';
-import { monthOf } from './months';
+import { currentMonth } from './months';
 
 export const SCHEMA_VERSION = 2;
 
@@ -20,6 +20,13 @@ const withId = (r) => ({ ...r, id: r.id || newId() });
 export const defaultCategoryRecords = () =>
   DEFAULT_CATEGORIES.map((c) => ({ ...c, id: newId(), is_default: true }));
 
+// Mês local de criação (created_date é ISO em UTC), nunca depois de um mês já marcado como pago.
+const migratedStartMonth = (r) => {
+  const created = r.created_date ? currentMonth(new Date(r.created_date)) : null;
+  const candidates = [created, r.paid_month_year].filter(Boolean).sort();
+  return candidates[0] || null;
+};
+
 export function migrateV1ToV2(v1 = {}) {
   const Expense = (v1.Expense || []).map((e) => ({
     ...omit(withId(e), ['amount', 'month_year']),
@@ -36,7 +43,7 @@ export function migrateV1ToV2(v1 = {}) {
     return {
       ...omit(withId(r), ['amount', 'is_paid_this_month', 'paid_month_year']),
       amount_cents,
-      start_month: r.start_month || (r.created_date ? monthOf(r.created_date) : r.paid_month_year) || null,
+      start_month: r.start_month || migratedStartMonth(r),
       end_month: r.end_month || null,
       payments,
     };
