@@ -1,29 +1,31 @@
-import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { useMonth } from '@/lib/useMonth';
 
-export default function MonthSelector({ label, isCurrentMonth, onPrev, onNext, onGoToCurrent }) {
+export default function MonthSelector() {
+  const { label, isCurrent, prev, next, goToCurrent } = useMonth();
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1">
       <button
-        onClick={onPrev}
-        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+        type="button"
+        onClick={prev}
+        aria-label="Mês anterior"
+        className="h-11 w-11 flex items-center justify-center rounded-xl hover:bg-secondary text-muted-foreground active:bg-secondary"
       >
-        <ChevronLeft className="w-4 h-4" />
+        <ChevronLeft className="w-5 h-5" />
       </button>
-      <span className="text-sm font-medium text-foreground capitalize min-w-[160px] text-center">
+      <span className="text-sm font-medium text-foreground capitalize min-w-[136px] text-center" aria-live="polite">
         {label}
       </span>
       <button
-        onClick={onNext}
-        className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+        type="button"
+        onClick={next}
+        aria-label="Próximo mês"
+        className="h-11 w-11 flex items-center justify-center rounded-xl hover:bg-secondary text-muted-foreground active:bg-secondary"
       >
-        <ChevronRight className="w-4 h-4" />
+        <ChevronRight className="w-5 h-5" />
       </button>
-      {!isCurrentMonth && (
-        <button
-          onClick={onGoToCurrent}
-          className="ml-1 text-xs text-primary hover:underline flex items-center gap-1"
-        >
-          <CalendarDays className="w-3 h-3" />
+      {!isCurrent && (
+        <button type="button" onClick={goToCurrent} className="h-11 px-2 text-xs font-medium text-primary">
           Hoje
         </button>
       )}

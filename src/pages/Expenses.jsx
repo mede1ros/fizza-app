@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import MonthSelector from '@/components/MonthSelector';
-import { useMonthSelector } from '@/hooks/useMonthSelector';
+import { useMonth } from '@/lib/useMonth';
 
 const formatCurrency = (v) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
@@ -22,7 +22,7 @@ const emptyForm = { name: '', amount: '', category: '', date: format(new Date(),
 
 export default function Expenses() {
   const qc = useQueryClient();
-  const { monthYear, label, isCurrentMonth, prev, next, goToCurrent } = useMonthSelector();
+  const { month: monthYear, isCurrent: isCurrentMonth } = useMonth();
   const [form, setForm] = useState(emptyForm);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -90,7 +90,7 @@ export default function Expenses() {
           <h1 className="font-heading text-2xl font-bold text-foreground">Gastos</h1>
         </div>
         <div className="flex items-center gap-3">
-          <MonthSelector label={label} isCurrentMonth={isCurrentMonth} onPrev={prev} onNext={next} onGoToCurrent={goToCurrent} />
+          <MonthSelector />
           <Button onClick={() => setShowForm(!showForm)} className="gap-2">
             <PlusCircle className="w-4 h-4" />
             <span className="hidden sm:inline">Novo Gasto</span>

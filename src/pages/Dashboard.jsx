@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import GoalReminders from '@/components/dashboard/GoalReminders';
 import MonthSelector from '@/components/MonthSelector';
-import { useMonthSelector } from '@/hooks/useMonthSelector';
+import { useMonth } from '@/lib/useMonth';
 
 const CHART_COLORS = [
   '#10b981', '#f59e0b', '#3b82f6', '#8b5cf6',
@@ -23,7 +23,7 @@ const formatCurrency = (v) =>
 
 export default function Dashboard() {
   const qc = useQueryClient();
-  const { monthYear, label, isCurrentMonth, prev, next, goToCurrent } = useMonthSelector();
+  const { month: monthYear, isCurrent: isCurrentMonth } = useMonth();
   const [editingIncome, setEditingIncome] = useState(false);
   const [incomeInput, setIncomeInput] = useState('');
 
@@ -142,13 +142,7 @@ export default function Dashboard() {
             {isCurrentMonth ? 'Olá! 👋' : 'Relatório'}
           </h1>
         </div>
-        <MonthSelector
-          label={label}
-          isCurrentMonth={isCurrentMonth}
-          onPrev={prev}
-          onNext={next}
-          onGoToCurrent={goToCurrent}
-        />
+        <MonthSelector />
       </div>
 
       {/* Goal Reminders — only current month */}
