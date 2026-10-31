@@ -1,263 +1,141 @@
-import { useState, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from 'recharts';
+import { Wallet, TrendingDown, Scale, ChevronRight, ShieldAlert } from 'lucide-react';
 import { db } from '@/api/db';
-import { format, subMonths } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { TrendingDown, Wallet, Target, Edit2, Check, X, RefreshCcw } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import GoalReminders from '@/components/dashboard/GoalReminders';
-import MonthSelector from '@/components/MonthSelector';
+import { formatMoney } from '@/domain/money';
+import { addMonths, monthShortLabel } from '@/domain/months';
+import { monthSummary, categoryBreakdown } from '@/domain/finance';
 import { useMonth } from '@/lib/useMonth';
+import { useCategories } from '@/components/CategoryPicker';
+import MonthSelector from '@/components/MonthSelector';
+import Fab from '@/components/Fab';
+import GoalReminders from '@/components/dashboard/GoalReminders';
+import CategoryPie from '@/components/dashboard/CategoryPie';
+import IncomeDrawer, { useIncomes } from '@/components/income/IncomeDrawer';
+import { cn } from '@/lib/utils';
 
-const CHART_COLORS = [
-  '#10b981', '#f59e0b', '#3b82f6', '#8b5cf6',
-  '#ec4899', '#f97316', '#06b6d4', '#84cc16',
-  '#ef4444', '#a78bfa',
-];
-
-const formatCurrency = (v) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
+const FILTERS = [['all', 'Todos'], ['fixed', 'Fixos'], ['variable', 'Variáveis']];
+const BACKUP_REMINDER_DAYS = 30;
 
 export default function Dashboard() {
-  const qc = useQueryClient();
-  const { month: monthYear, isCurrent: isCurrentMonth } = useMonth();
-  const [editingIncome, setEditingIncome] = useState(false);
-  const [incomeInput, setIncomeInput] = useState('');
+  const navigate = useNavigate();
+  const { month, isCurrent } = useMonth();
+  const [filter, setFilter] = useState('all');
+  const [incomeOpen, setIncomeOpen] = useState(false);
 
-  const { data: budgets = [] } = useQuery({
-    queryKey: ['budgets'],
-    queryFn: () => db.entities.MonthlyBudget.list(),
+  const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => db.entities.Expense.list('-date') });
+  const { data: recurring = [] } = useQuery({ queryKey: ['recurring'], queryFn: () => db.entities.RecurringExpense.list('due_day') });
+  const { data: goals = [] } = useQuery({ queryKey: ['goals'], queryFn: () => db.entities.FinancialGoal.list() });
+  const { data: lastBackup, isFetched: backupChecked } = useQuery({
+    queryKey: ['meta', 'last_backup_at'],
+    queryFn: async () => (await db.getMeta('last_backup_at')) ?? null,
   });
+  const { data: incomes = [] } = useIncomes();
+  const { data: categories = [] } = useCategories();
 
-  const { data: expenses = [] } = useQuery({
-    queryKey: ['expenses'],
-    queryFn: () => db.entities.Expense.list(),
-  });
+  const data = { expenses, recurring, incomes };
+  const summary = monthSummary(data, month);
+  const slices = categoryBreakdown(data, month, filter, categories);
 
-  const { data: recurring = [] } = useQuery({
-    queryKey: ['recurring'],
-    queryFn: () => db.entities.RecurringExpense.list(),
-  });
+  const history = useMemo(() => Array.from({ length: 6 }, (_, i) => {
+    const m = addMonths(month, i - 5);
+    const s = monthSummary({ expenses, recurring, incomes }, m);
+    return { name: monthShortLabel(m), Renda: s.incomeCents / 100, Gastos: s.totalCents / 100 };
+  }), [month, expenses, recurring, incomes]);
 
-  const { data: goals = [] } = useQuery({
-    queryKey: ['goals'],
-    queryFn: () => db.entities.FinancialGoal.list(),
-  });
-
-  const budget = budgets.find(b => b.month_year === monthYear);
-  const income = budget?.income || 0;
-
-  // Manual expenses for selected month
-  const monthExpenses = expenses.filter(e => e.month_year === monthYear);
-
-  // Recurring expenses count as expenses for the selected month (sum all recurring)
-  const recurringTotal = recurring.reduce((s, e) => s + (e.amount || 0), 0);
-
-  // Build combined category map: manual + recurring
-  const categoryData = useMemo(() => {
-    const map = {};
-    monthExpenses.forEach(e => {
-      map[e.category || 'Outros'] = (map[e.category || 'Outros'] || 0) + (e.amount || 0);
-    });
-    recurring.forEach(e => {
-      const cat = e.category || 'Recorrentes';
-      map[cat] = (map[cat] || 0) + (e.amount || 0);
-    });
-    return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [monthExpenses, recurring]);
-
-  const totalExpenses = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0) + recurringTotal;
-  const balance = income - totalExpenses;
-
-  // ---- Comparison: last 6 months ----
-  const comparisonData = useMemo(() => {
-    return Array.from({ length: 6 }, (_, i) => {
-      const d = subMonths(new Date(), 5 - i);
-      const my = format(d, 'yyyy-MM');
-      const manualTotal = expenses.filter(e => e.month_year === my).reduce((s, e) => s + (e.amount || 0), 0);
-      // recurring always the same amount per month
-      const total = manualTotal + recurringTotal;
-      const bud = budgets.find(b => b.month_year === my);
-      return {
-        name: format(d, 'MMM/yy', { locale: ptBR }),
-        Gastos: parseFloat(total.toFixed(2)),
-        Renda: bud?.income || 0,
-      };
-    });
-  }, [expenses, budgets, recurringTotal]);
-
-  const saveBudgetMutation = useMutation({
-    mutationFn: async (newIncome) => {
-      const val = parseFloat(newIncome.replace(',', '.'));
-      if (budget) {
-        return db.entities.MonthlyBudget.update(budget.id, { income: val });
-      } else {
-        return db.entities.MonthlyBudget.create({ month_year: monthYear, income: val });
-      }
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['budgets'] });
-      setEditingIncome(false);
-    },
-  });
-
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      const { name, value } = payload[0].payload;
-      const pct = totalExpenses > 0 ? ((value / totalExpenses) * 100).toFixed(1) : 0;
-      return (
-        <div className="bg-card border border-border rounded-xl p-3 shadow-lg text-sm">
-          <p className="font-semibold text-foreground">{name}</p>
-          <p className="text-primary font-medium">{formatCurrency(value)}</p>
-          <p className="text-muted-foreground">{pct}% do total</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  const BarTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-card border border-border rounded-xl p-3 shadow-lg text-sm space-y-1">
-          <p className="font-semibold text-foreground capitalize">{label}</p>
-          {payload.map((p, i) => (
-            <p key={i} style={{ color: p.color }}>{p.name}: {formatCurrency(p.value)}</p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
+  const hasData = expenses.length + recurring.length + incomes.length > 0;
+  const backupStale = !lastBackup || Date.now() - new Date(lastBackup).getTime() > BACKUP_REMINDER_DAYS * 864e5;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">
-            {isCurrentMonth ? 'Olá! 👋' : 'Relatório'}
-          </h1>
-        </div>
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-bold text-foreground">{isCurrent ? 'Olá! 👋' : 'Resumo do mês'}</h1>
         <MonthSelector />
       </div>
 
-      {/* Goal Reminders — only current month */}
-      {isCurrentMonth && <GoalReminders goals={goals} />}
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Renda */}
-        <Card className="border-border shadow-sm">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                <Wallet className="w-5 h-5 text-primary" />
-              </div>
-              <button
-                onClick={() => { setEditingIncome(true); setIncomeInput(income ? String(income) : ''); }}
-                className="text-muted-foreground hover:text-primary transition-colors"
-              >
-                <Edit2 className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground mb-1">Renda do Mês</p>
-            {editingIncome ? (
-              <div className="flex items-center gap-1 mt-1">
-                <Input value={incomeInput} onChange={e => setIncomeInput(e.target.value)} className="h-8 text-sm" placeholder="0,00" autoFocus />
-                <Button size="icon" className="h-8 w-8" onClick={() => saveBudgetMutation.mutate(incomeInput)}><Check className="w-3 h-3" /></Button>
-                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditingIncome(false)}><X className="w-3 h-3" /></Button>
-              </div>
-            ) : (
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(income)}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Gastos */}
-        <Card className="border-border shadow-sm">
-          <CardContent className="p-5">
-            <div className="w-10 h-10 rounded-xl bg-destructive/10 flex items-center justify-center mb-3">
-              <TrendingDown className="w-5 h-5 text-destructive" />
-            </div>
-            <p className="text-xs text-muted-foreground mb-1">Total de Gastos</p>
-            <p className="text-2xl font-bold text-destructive">{formatCurrency(totalExpenses)}</p>
-            {recurringTotal > 0 && (
-              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                <RefreshCcw className="w-3 h-3" />
-                incl. {formatCurrency(recurringTotal)} recorrentes
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Saldo */}
-        <Card className="border-border shadow-sm">
-          <CardContent className="p-5">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${balance >= 0 ? 'bg-primary/10' : 'bg-destructive/10'}`}>
-              <Target className={`w-5 h-5 ${balance >= 0 ? 'text-primary' : 'text-destructive'}`} />
-            </div>
-            <p className="text-xs text-muted-foreground mb-1">Saldo Disponível</p>
-            <p className={`text-2xl font-bold ${balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
-              {formatCurrency(balance)}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Pie Chart */}
-      {categoryData.length > 0 ? (
-        <Card className="border-border shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Gastos por Categoria</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart>
-                <Pie data={categoryData} cx="50%" cy="50%" innerRadius={55} outerRadius={100} paddingAngle={3} dataKey="value">
-                  {categoryData.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-                <Legend formatter={(value) => <span className="text-xs text-foreground">{value}</span>} />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card className="border-border shadow-sm border-dashed">
-          <CardContent className="p-10 text-center">
-            <p className="text-muted-foreground text-sm">Nenhum gasto registrado neste período.</p>
-          </CardContent>
-        </Card>
+      {backupChecked && hasData && backupStale && (
+        <Link to="/config" className="flex items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <ShieldAlert className="w-5 h-5 flex-shrink-0" aria-hidden="true" />
+          <span className="flex-1">Faça um backup: seus dados ficam só neste iPhone.</span>
+          <ChevronRight className="w-4 h-4" aria-hidden="true" />
+        </Link>
       )}
 
-      {/* Comparison Bar Chart — last 6 months */}
-      <Card className="border-border shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Histórico — Últimos 6 meses</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={comparisonData} barCategoryGap="30%">
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+      {isCurrent && <GoalReminders goals={goals} />}
+
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          type="button"
+          aria-label="Ver entradas de renda"
+          onClick={() => setIncomeOpen(true)}
+          data-testid="card-renda"
+          className="col-span-2 rounded-2xl border border-border bg-card p-4 text-left flex items-center gap-3 active:bg-secondary"
+        >
+          <span className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center"><Wallet className="w-5 h-5 text-primary" /></span>
+          <span className="flex-1">
+            <span className="block text-xs text-muted-foreground">Renda do mês</span>
+            <span className="block text-xl font-bold text-foreground">{formatMoney(summary.incomeCents)}</span>
+          </span>
+          <ChevronRight className="w-5 h-5 text-muted-foreground" aria-hidden="true" />
+        </button>
+        <div data-testid="card-gastos" className="rounded-2xl border border-border bg-card p-4">
+          <TrendingDown className="w-5 h-5 text-destructive mb-2" aria-hidden="true" />
+          <p className="text-xs text-muted-foreground">Gastos</p>
+          <p className="text-lg font-bold text-destructive">{formatMoney(summary.totalCents)}</p>
+          {summary.fixedCents > 0 && <p className="text-[11px] text-muted-foreground">incl. {formatMoney(summary.fixedCents)} em fixos</p>}
+        </div>
+        <div data-testid="card-saldo" className="rounded-2xl border border-border bg-card p-4">
+          <Scale className={cn('w-5 h-5 mb-2', summary.balanceCents >= 0 ? 'text-primary' : 'text-destructive')} aria-hidden="true" />
+          <p className="text-xs text-muted-foreground">Saldo</p>
+          <p className={cn('text-lg font-bold', summary.balanceCents >= 0 ? 'text-primary' : 'text-destructive')}>{formatMoney(summary.balanceCents)}</p>
+        </div>
+      </div>
+
+      <section aria-labelledby="pizza-titulo" className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <h2 id="pizza-titulo" className="text-base font-semibold">Para onde vai o dinheiro</h2>
+        </div>
+        <div className="grid grid-cols-3 gap-1 rounded-xl bg-secondary p-1 mb-3">
+          {FILTERS.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value)}
+              className={cn('h-9 rounded-lg text-xs font-medium', filter === value ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <CategoryPie slices={slices} />
+      </section>
+
+      <section aria-labelledby="historico-titulo" className="rounded-2xl border border-border bg-card p-4">
+        <h2 id="historico-titulo" className="text-base font-semibold mb-2">Últimos 6 meses</h2>
+        <div className="h-52" aria-hidden="true">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={history} barCategoryGap="25%">
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-              <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickFormatter={(v) => `R$${(v/1000).toFixed(0)}k`} width={48} />
-              <Tooltip content={<BarTooltip />} />
-              <Bar dataKey="Renda" fill="#10b981" radius={[4,4,0,0]} />
-              <Bar dataKey="Gastos" fill="#ef4444" radius={[4,4,0,0]} />
+              <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} width={44} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+              <Tooltip formatter={(v) => formatMoney(Math.round(v * 100))} />
+              <Bar dataKey="Renda" fill="#10b981" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="Gastos" fill="#ef4444" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-          <div className="flex items-center gap-4 mt-2">
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 block"/><span className="text-xs text-muted-foreground">Renda</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500 block"/><span className="text-xs text-muted-foreground">Gastos</span></div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+        <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500" />Renda</span>
+          <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-500" />Gastos</span>
+        </div>
+      </section>
+
+      <Fab label="Registrar gasto" onClick={() => navigate('/gastos?novo=1')} />
+
+      <IncomeDrawer open={incomeOpen} onOpenChange={setIncomeOpen} month={month} />
     </div>
   );
 }
