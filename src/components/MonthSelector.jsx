@@ -1,5 +1,4 @@
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 export default function MonthSelector({ label, isCurrentMonth, onPrev, onNext, onGoToCurrent }) {
   return (

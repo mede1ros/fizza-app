@@ -1,5 +1,4 @@
 import { Target } from 'lucide-react';
-import { format, parseISO, differenceInMonths } from 'date-fns';
 
 const formatCurrency = (v) =>
   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);

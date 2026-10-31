@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { db } from '@/api/db';
-import { PlusCircle, Trash2, Edit2, Check, X, ShoppingCart, CheckCircle2 } from 'lucide-react';
+import { PlusCircle, Trash2, Edit2, Check, X, ShoppingCart } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';

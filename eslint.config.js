@@ -6,16 +6,14 @@ import pluginUnusedImports from "eslint-plugin-unused-imports";
 
 export default [
   {
-    files: [
-      "src/components/**/*.{js,mjs,cjs,jsx}",
-      "src/pages/**/*.{js,mjs,cjs,jsx}",
-      "src/Layout.jsx",
-    ],
-    ignores: ["src/lib/**/*", "src/components/ui/**/*"],
+    ignores: ["dist/**", "dev-dist/**", "src/components/ui/**", ".superpowers/**"],
+  },
+  {
+    files: ["src/**/*.{js,mjs,cjs,jsx}"],
     ...pluginJs.configs.recommended,
     ...pluginReact.configs.flat.recommended,
     languageOptions: {
-      globals: globals.browser,
+      globals: { ...globals.browser, __APP_VERSION__: "readonly" },
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: "module",
@@ -55,6 +53,13 @@ export default [
         { ignore: ["cmdk-input-wrapper", "toast-close"] },
       ],
       "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
+    },
+  },
+  {
+    files: ["src/**/*.test.{js,jsx}", "src/test/**"],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.vitest },
     },
   },
 ];
