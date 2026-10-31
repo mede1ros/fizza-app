@@ -1,30 +1,26 @@
-// Armazenamento local do Fizza: cada entidade é uma lista de registros
-// guardada no localStorage do navegador, sem servidor e sem login.
+// Armazenamento local do Fizza em IndexedDB: sem servidor e sem login.
+// Cada entidade é um object store; "meta" guarda versão do esquema e datas de backup.
+import { openDB, deleteDB } from 'idb';
+import { STORES, SCHEMA_VERSION, migrateV1ToV2, defaultCategoryRecords, newId } from '@/domain/migrate';
 
-const STORAGE_PREFIX = 'fizza:';
+const DB_NAME = 'fizza';
+const META = 'meta';
+const V1_PREFIX = 'fizza:';
+const V1_STORES = ['Expense', 'RecurringExpense', 'MonthlyBudget', 'FinancialGoal', 'ShoppingItem'];
 
-const ENTITY_NAMES = [
-  'Expense',
-  'RecurringExpense',
-  'MonthlyBudget',
-  'FinancialGoal',
-  'ShoppingItem',
-];
+let dbPromise = null;
 
-const read = (name) => {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_PREFIX + name)) || [];
-  } catch {
-    return [];
+const open = () => {
+  if (!dbPromise) {
+    dbPromise = openDB(DB_NAME, 1, {
+      upgrade(database) {
+        STORES.forEach((s) => database.createObjectStore(s, { keyPath: 'id' }));
+        database.createObjectStore(META);
+      },
+    });
   }
+  return dbPromise;
 };
-
-const write = (name, records) => {
-  localStorage.setItem(STORAGE_PREFIX + name, JSON.stringify(records));
-};
-
-const newId = () =>
-  (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
 // sort: nome do campo, com "-" na frente para ordem decrescente (ex.: '-date').
 const sortRecords = (records, sort = '-created_date') => {
@@ -43,33 +39,114 @@ const sortRecords = (records, sort = '-created_date') => {
 
 const createEntity = (name) => ({
   async list(sort) {
-    return sortRecords(read(name), sort);
+    return sortRecords(await (await open()).getAll(name), sort);
   },
 
   async create(data) {
     const now = new Date().toISOString();
     const record = { ...data, id: newId(), created_date: now, updated_date: now };
-    write(name, [...read(name), record]);
+    await (await open()).add(name, record);
     return record;
   },
 
   async update(id, data) {
-    let updated = null;
-    const records = read(name).map((r) => {
-      if (r.id !== id) return r;
-      updated = { ...r, ...data, id, updated_date: new Date().toISOString() };
-      return updated;
-    });
-    if (!updated) throw new Error(`${name} ${id} não encontrado`);
-    write(name, records);
+    const database = await open();
+    const tx = database.transaction(name, 'readwrite');
+    const current = await tx.store.get(id);
+    if (!current) throw new Error(`${name} ${id} não encontrado`);
+    const updated = { ...current, ...data, id, updated_date: new Date().toISOString() };
+    await tx.store.put(updated);
+    await tx.done;
     return updated;
   },
 
   async delete(id) {
-    write(name, read(name).filter((r) => r.id !== id));
+    await (await open()).delete(name, id);
   },
 });
 
+const readV1FromLocalStorage = () => {
+  const found = {};
+  V1_STORES.forEach((s) => {
+    const raw = localStorage.getItem(V1_PREFIX + s);
+    if (raw === null) return;
+    try {
+      found[s] = JSON.parse(raw) || [];
+    } catch {
+      found[s] = [];
+    }
+  });
+  return Object.keys(found).length ? found : null;
+};
+
+const writeAll = async (data) => {
+  const database = await open();
+  const tx = database.transaction(STORES, 'readwrite');
+  await Promise.all(STORES.map(async (s) => {
+    const store = tx.objectStore(s);
+    await store.clear();
+    await Promise.all((data[s] || []).map((r) => store.put(r)));
+  }));
+  await tx.done;
+};
+
+let initPromise = null;
+
 export const db = {
-  entities: Object.fromEntries(ENTITY_NAMES.map((n) => [n, createEntity(n)])),
+  entities: Object.fromEntries(STORES.map((s) => [s, createEntity(s)])),
+
+  init() {
+    if (!initPromise) {
+      initPromise = (async () => {
+        const database = await open();
+        if (!(await database.get(META, 'schema_version'))) {
+          const v1 = readV1FromLocalStorage();
+          if (v1) {
+            await database.put(META, v1, 'v1_snapshot');
+            await writeAll(migrateV1ToV2(v1));
+            V1_STORES.forEach((s) => localStorage.removeItem(V1_PREFIX + s));
+          } else if ((await database.count('Category')) === 0) {
+            await writeAll({ Category: defaultCategoryRecords() });
+          }
+          await database.put(META, SCHEMA_VERSION, 'schema_version');
+        }
+        try {
+          await navigator.storage?.persist?.();
+        } catch {
+          // O navegador pode recusar; os dados continuam salvos.
+        }
+      })();
+    }
+    return initPromise;
+  },
+
+  async exportAll() {
+    const database = await open();
+    const entries = await Promise.all(STORES.map(async (s) => [s, await database.getAll(s)]));
+    return Object.fromEntries(entries);
+  },
+
+  async importAll(data) {
+    await writeAll(data);
+  },
+
+  async clearAll() {
+    await writeAll({ Category: defaultCategoryRecords() });
+  },
+
+  async getMeta(key) {
+    return (await open()).get(META, key);
+  },
+
+  async setMeta(key, value) {
+    await (await open()).put(META, value, key);
+  },
+
+  // Somente para testes: fecha e apaga o banco.
+  async _reset() {
+    if (dbPromise) (await dbPromise).close();
+    dbPromise = null;
+    initPromise = null;
+    await deleteDB(DB_NAME);
+  },
 };
