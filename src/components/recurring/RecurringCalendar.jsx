@@ -22,7 +22,7 @@ export default function RecurringCalendar({ items, month, today = new Date() }) 
 
   return (
     <div className="bg-card border border-border rounded-2xl p-4">
-      <p className="font-semibold text-sm text-foreground mb-3 capitalize">Calendário · {monthLabel(month)}</p>
+      <p className="font-semibold text-sm text-foreground mb-3">Calendário · {monthLabel(month)}</p>
       <div className="grid grid-cols-7 mb-1" aria-hidden="true">
         {DAY_NAMES.map((d) => (
           <div key={d} className="text-center text-[11px] text-muted-foreground font-medium py-1">{d}</div>

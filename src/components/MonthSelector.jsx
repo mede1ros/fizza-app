@@ -13,7 +13,7 @@ export default function MonthSelector() {
       >
         <ChevronLeft className="w-5 h-5" />
       </button>
-      <span className="text-sm font-medium text-foreground capitalize min-w-[136px] text-center" aria-live="polite">
+      <span className="text-sm font-medium text-foreground inline-block first-letter:uppercase min-w-[136px] text-center" aria-live="polite">
         {label}
       </span>
       <button

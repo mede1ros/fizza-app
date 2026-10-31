@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import { db } from '@/api/db'
+import UpdatePrompt from '@/components/UpdatePrompt'
 import '@/index.css'
 
 const root = ReactDOM.createRoot(document.getElementById('root'))
@@ -11,7 +12,7 @@ root.render(
 )
 
 db.init()
-  .then(() => root.render(<App />))
+  .then(() => root.render(<><App /><UpdatePrompt /></>))
   .catch((error) => {
     console.error(error)
     root.render(

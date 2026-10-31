@@ -120,7 +120,7 @@ export default function Dashboard() {
             <BarChart data={history} barCategoryGap="25%">
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-              <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} width={44} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+              <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} width={44} tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}k` : v)} />
               <Tooltip formatter={(v) => formatMoney(Math.round(v * 100))} />
               <Bar dataKey="Renda" fill="#10b981" radius={[4, 4, 0, 0]} />
               <Bar dataKey="Gastos" fill="#ef4444" radius={[4, 4, 0, 0]} />
