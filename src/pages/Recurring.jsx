@@ -1,271 +1,225 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Check, Circle } from 'lucide-react';
 import { db } from '@/api/db';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { PlusCircle, Trash2, Bell, Check, Edit2 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { formatMoney, parseMoney, centsToInput } from '@/domain/money';
+import { todayISO } from '@/domain/months';
+import { isActiveInMonth, recurringStatus, recurringAmountForMonth, effectiveDueDay } from '@/domain/finance';
+import { useMonth } from '@/lib/useMonth';
+import MonthSelector from '@/components/MonthSelector';
+import FormSheet from '@/components/FormSheet';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import MoneyInput from '@/components/MoneyInput';
+import Fab from '@/components/Fab';
+import RecurringForm from '@/components/recurring/RecurringForm';
 import RecurringCalendar from '@/components/recurring/RecurringCalendar';
-import AddRecurringForm from '@/components/recurring/AddRecurringForm';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/use-toast';
 
-const formatCurrency = (v) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
+const CURRENT_GROUPS = [
+  { status: 'overdue', title: 'Atrasados', tone: 'text-destructive' },
+  { status: 'today', title: 'Vencem hoje', tone: 'text-amber-600' },
+  { status: 'upcoming', title: 'Próximos', tone: 'text-foreground' },
+  { status: 'paid', title: 'Pagos', tone: 'text-primary' },
+];
 
-const currentMonth = format(new Date(), 'yyyy-MM');
-const today = new Date().getDate();
+function Row({ item, month, onTogglePaid, onEdit }) {
+  const paid = Boolean(item.payments?.[month]);
+  return (
+    <li className="flex items-center gap-2 pl-2 pr-3 min-h-[60px]">
+      <button
+        type="button"
+        aria-label={paid ? `Desmarcar ${item.name}` : `Marcar ${item.name} como pago`}
+        onClick={() => onTogglePaid(item)}
+        className="h-11 w-11 flex items-center justify-center rounded-full flex-shrink-0"
+      >
+        {paid
+          ? <Check className="w-5 h-5 text-primary" />
+          : <Circle className="w-5 h-5 text-muted-foreground" />}
+      </button>
+      <button type="button" aria-label={`Editar ${item.name}`} onClick={() => onEdit(item)} className="flex-1 flex items-center gap-3 min-w-0 text-left min-h-[56px]">
+        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color || '#10b981' }} aria-hidden="true" />
+        <span className="flex-1 min-w-0">
+          <span className={`block text-sm font-medium truncate ${paid ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{item.name}</span>
+          <span className="block text-xs text-muted-foreground truncate">
+            {item.category || 'Outros'} · vence dia {effectiveDueDay(item.due_day, month)}
+            {item.end_month ? ` · até ${item.end_month.split('-').reverse().join('/')}` : ''}
+          </span>
+        </span>
+        <span className="text-sm font-semibold text-foreground">{formatMoney(recurringAmountForMonth(item, month))}</span>
+      </button>
+    </li>
+  );
+}
 
 export default function Recurring() {
   const qc = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [editItem, setEditItem] = useState(null);
-  const [notifGranted, setNotifGranted] = useState(
-    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
-  );
+  const { month, isCurrent } = useMonth();
+  const [editing, setEditing] = useState(null); // null | 'new' | item
+  const [paying, setPaying] = useState(null);
+  const [paidValue, setPaidValue] = useState('');
+  const [paidError, setPaidError] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const { data: recurring = [], isLoading } = useQuery({
     queryKey: ['recurring'],
     queryFn: () => db.entities.RecurringExpense.list('due_day'),
   });
 
-  // Reset paid status if new month
-  useEffect(() => {
-    recurring.forEach(item => {
-      if (item.is_paid_this_month && item.paid_month_year && item.paid_month_year !== currentMonth) {
-        db.entities.RecurringExpense.update(item.id, {
-          is_paid_this_month: false,
-          paid_month_year: null,
-        }).then(() => qc.invalidateQueries({ queryKey: ['recurring'] }));
-      }
-    });
-  }, [recurring]);
+  const active = useMemo(() => recurring.filter((r) => isActiveInMonth(r, month)), [recurring, month]);
+  const today = new Date();
 
-  // Schedule browser notifications for due today/tomorrow
-  useEffect(() => {
-    if (notifGranted !== 'granted') return;
-    recurring.forEach(item => {
-      if (item.is_paid_this_month) return;
-      const daysUntil = item.due_day - today;
-      if (daysUntil === 1) {
-        new Notification(`⚠️ Fizza — Vence amanhã`, {
-          body: `${item.name}: ${formatCurrency(item.amount)}`,
-          icon: '/favicon.ico',
-        });
-      } else if (daysUntil === 0) {
-        new Notification(`🔔 Fizza — Vence hoje!`, {
-          body: `${item.name}: ${formatCurrency(item.amount)}`,
-          icon: '/favicon.ico',
-        });
-      }
-    });
-  }, [recurring, notifGranted]);
+  const totals = active.reduce(
+    (acc, r) => {
+      const amount = recurringAmountForMonth(r, month);
+      acc.planned += amount;
+      if (r.payments?.[month]) acc.paid += amount;
+      return acc;
+    },
+    { planned: 0, paid: 0 }
+  );
 
-  const requestNotifications = async () => {
-    if (typeof Notification === 'undefined') return;
-    const perm = await Notification.requestPermission();
-    setNotifGranted(perm);
-  };
+  const groups = isCurrent
+    ? CURRENT_GROUPS.map((g) => ({ ...g, items: active.filter((r) => recurringStatus(r, month, today) === g.status) }))
+    : [
+      { status: 'unpaid', title: 'Não pagos', tone: 'text-foreground', items: active.filter((r) => !r.payments?.[month]) },
+      { status: 'paid', title: 'Pagos', tone: 'text-primary', items: active.filter((r) => r.payments?.[month]) },
+    ];
 
-  const togglePaidMutation = useMutation({
-    mutationFn: ({ id, paid }) =>
-      db.entities.RecurringExpense.update(id, {
-        is_paid_this_month: paid,
-        paid_month_year: paid ? currentMonth : null,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['recurring'] }),
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['recurring'] });
+  const onError = () => toast({ title: 'Não foi possível salvar', description: 'Tente novamente.', variant: 'destructive' });
+  const closeEditor = () => { setEditing(null); setConfirmDelete(false); };
+
+  const saveMutation = useMutation({
+    mutationFn: (data) => (editing && editing !== 'new'
+      ? db.entities.RecurringExpense.update(editing.id, data)
+      : db.entities.RecurringExpense.create({ ...data, payments: {} })),
+    onSuccess: () => { invalidate(); closeEditor(); },
+    onError,
+  });
+
+  const paymentsMutation = useMutation({
+    mutationFn: ({ item, payments }) => db.entities.RecurringExpense.update(item.id, { payments }),
+    onSuccess: () => { invalidate(); setPaying(null); },
+    onError,
+  });
+
+  const endMutation = useMutation({
+    mutationFn: (item) => db.entities.RecurringExpense.update(item.id, { end_month: month }),
+    onSuccess: () => { invalidate(); closeEditor(); toast({ title: 'Fixo encerrado', description: 'O histórico foi mantido.' }); },
+    onError,
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => db.entities.RecurringExpense.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['recurring'] }),
+    onSuccess: () => { invalidate(); closeEditor(); },
+    onError,
   });
 
-  const totalRecurring = recurring.reduce((s, e) => s + (e.amount || 0), 0);
-  const totalPaid = recurring.filter(e => e.is_paid_this_month).reduce((s, e) => s + (e.amount || 0), 0);
-  const totalPending = totalRecurring - totalPaid;
+  const togglePaid = (item) => {
+    if (item.payments?.[month]) {
+      const payments = { ...item.payments };
+      delete payments[month];
+      paymentsMutation.mutate({ item, payments });
+    } else {
+      setPaidValue(centsToInput(item.amount_cents));
+      setPaidError('');
+      setPaying(item);
+    }
+  };
 
-  const overdue = recurring.filter(e => !e.is_paid_this_month && e.due_day < today);
-  const dueToday = recurring.filter(e => !e.is_paid_this_month && e.due_day === today);
-  const upcoming = recurring.filter(e => !e.is_paid_this_month && e.due_day > today);
-  const paid = recurring.filter(e => e.is_paid_this_month);
+  const confirmPayment = (e) => {
+    e.preventDefault();
+    const money = parseMoney(paidValue);
+    if (!money.ok) { setPaidError(money.error); return; }
+    const payments = { ...(paying.payments || {}), [month]: { paid_at: todayISO(), amount_cents: money.cents } };
+    paymentsMutation.mutate({ item: paying, payments });
+  };
+
+  const isEdit = editing && editing !== 'new';
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">Recorrentes</h1>
-          <p className="text-muted-foreground text-sm capitalize">
-            {format(new Date(), "MMMM 'de' yyyy", { locale: ptBR })}
-          </p>
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-bold text-foreground">Fixos</h1>
+        <MonthSelector />
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-2xl bg-secondary/60 p-3">
+          <p className="text-[11px] text-muted-foreground">Previsto</p>
+          <p data-testid="total-previsto" className="text-sm font-bold text-foreground">{formatMoney(totals.planned)}</p>
         </div>
-        <div className="flex gap-2">
-          {notifGranted !== 'granted' && (
-            <Button variant="outline" size="sm" onClick={requestNotifications} className="gap-2">
-              <Bell className="w-4 h-4" />
-              <span className="hidden sm:inline">Ativar alertas</span>
-            </Button>
-          )}
-          {notifGranted === 'granted' && (
-            <div className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-3 py-1.5 rounded-lg">
-              <Bell className="w-3 h-3" />
-              Alertas ativos
-            </div>
-          )}
-          <Button onClick={() => { setEditItem(null); setShowForm(true); }} className="gap-2">
-            <PlusCircle className="w-4 h-4" />
-            Novo
-          </Button>
+        <div className="rounded-2xl bg-primary/10 p-3">
+          <p className="text-[11px] text-muted-foreground">Pago</p>
+          <p className="text-sm font-bold text-primary">{formatMoney(totals.paid)}</p>
+        </div>
+        <div className="rounded-2xl bg-amber-500/10 p-3">
+          <p className="text-[11px] text-muted-foreground">Pendente</p>
+          <p className="text-sm font-bold text-amber-600">{formatMoney(totals.planned - totals.paid)}</p>
         </div>
       </div>
 
-      {/* Add/Edit Form */}
-      {showForm && (
-        <AddRecurringForm
-          editItem={editItem}
-          onClose={() => { setShowForm(false); setEditItem(null); }}
-          onSaved={() => { qc.invalidateQueries({ queryKey: ['recurring'] }); setShowForm(false); setEditItem(null); }}
-        />
-      )}
-
-      {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-3">
-        <Card className="border-border shadow-sm">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">Total/Mês</p>
-            <p className="font-bold text-base text-foreground">{formatCurrency(totalRecurring)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-border shadow-sm">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">Pago</p>
-            <p className="font-bold text-base text-primary">{formatCurrency(totalPaid)}</p>
-          </CardContent>
-        </Card>
-        <Card className="border-destructive/30 shadow-sm bg-destructive/5">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground mb-1">Pendente</p>
-            <p className="font-bold text-base text-destructive">{formatCurrency(totalPending)}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Calendar */}
-      <RecurringCalendar items={recurring} />
-
-      {/* Lists */}
       {isLoading ? (
-        <p className="text-center text-muted-foreground py-8 text-sm">Carregando...</p>
-      ) : recurring.length === 0 ? (
-        <Card className="border-dashed border-border shadow-sm">
-          <CardContent className="p-10 text-center">
-            <p className="text-muted-foreground text-sm">Nenhum gasto recorrente cadastrado.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {/* Overdue */}
-          {overdue.length > 0 && (
-            <ExpenseSection
-              title="⚠️ Em Atraso"
-              items={overdue}
-              accentClass="border-destructive/40"
-              onToggle={(id, paid) => togglePaidMutation.mutate({ id, paid })}
-              onEdit={(item) => { setEditItem(item); setShowForm(true); }}
-              onDelete={(id) => deleteMutation.mutate(id)}
-            />
-          )}
-          {/* Due Today */}
-          {dueToday.length > 0 && (
-            <ExpenseSection
-              title="🔔 Vence Hoje"
-              items={dueToday}
-              accentClass="border-accent/40"
-              onToggle={(id, paid) => togglePaidMutation.mutate({ id, paid })}
-              onEdit={(item) => { setEditItem(item); setShowForm(true); }}
-              onDelete={(id) => deleteMutation.mutate(id)}
-            />
-          )}
-          {/* Upcoming */}
-          {upcoming.length > 0 && (
-            <ExpenseSection
-              title="📅 Próximos"
-              items={upcoming}
-              accentClass="border-border"
-              onToggle={(id, paid) => togglePaidMutation.mutate({ id, paid })}
-              onEdit={(item) => { setEditItem(item); setShowForm(true); }}
-              onDelete={(id) => deleteMutation.mutate(id)}
-            />
-          )}
-          {/* Paid */}
-          {paid.length > 0 && (
-            <ExpenseSection
-              title="✅ Pagos"
-              items={paid}
-              accentClass="border-border opacity-60"
-              onToggle={(id, paid) => togglePaidMutation.mutate({ id, paid })}
-              onEdit={(item) => { setEditItem(item); setShowForm(true); }}
-              onDelete={(id) => deleteMutation.mutate(id)}
-            />
-          )}
+        <p className="text-center text-muted-foreground py-8 text-sm">Carregando…</p>
+      ) : active.length === 0 ? (
+        <div className="text-center py-12 space-y-1">
+          <p className="text-sm text-muted-foreground">Nenhum gasto fixo neste mês.</p>
+          <p className="text-xs text-muted-foreground">Cadastre aluguel, assinaturas e contas com o +.</p>
         </div>
+      ) : (
+        groups.filter((g) => g.items.length).map((g) => (
+          <section key={g.status} aria-label={g.title}>
+            <h2 className={`text-xs font-semibold mb-1 px-1 ${g.tone}`}>{g.title} ({g.items.length})</h2>
+            <ul className="rounded-2xl border border-border bg-card divide-y divide-border overflow-hidden">
+              {g.items.map((item) => (
+                <Row key={item.id} item={item} month={month} onTogglePaid={togglePaid} onEdit={setEditing} />
+              ))}
+            </ul>
+          </section>
+        ))
       )}
-    </div>
-  );
-}
 
-function ExpenseSection({ title, items, accentClass, onToggle, onEdit, onDelete }) {
-  return (
-    <div>
-      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{title}</p>
-      <div className="space-y-2">
-        {items.map(item => (
-          <Card key={item.id} className={`border shadow-sm ${accentClass}`}>
-            <CardContent className="p-4 flex items-center gap-3">
-              {/* Color dot */}
-              <div
-                className="w-3 h-3 rounded-full flex-shrink-0"
-                style={{ backgroundColor: item.color || '#10b981' }}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className={`text-sm font-medium truncate ${item.is_paid_this_month ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
-                    {item.name}
-                  </p>
-                  {item.category && (
-                    <Badge variant="secondary" className="text-xs px-1.5 py-0 flex-shrink-0">{item.category}</Badge>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Todo dia <strong>{item.due_day}</strong> • {formatCurrency(item.amount)}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <button
-                  onClick={() => onToggle(item.id, !item.is_paid_this_month)}
-                  className={`p-1.5 rounded-lg transition-colors ${item.is_paid_this_month ? 'bg-primary text-primary-foreground' : 'border border-border text-muted-foreground hover:border-primary hover:text-primary'}`}
-                  title={item.is_paid_this_month ? 'Marcar como pendente' : 'Marcar como pago'}
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => onEdit(item)}
-                  className="p-1.5 text-muted-foreground hover:text-primary rounded-lg hover:bg-secondary transition-colors"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => onDelete(item.id)}
-                  className="p-1.5 text-muted-foreground hover:text-destructive rounded-lg hover:bg-destructive/10 transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {active.length > 0 && <RecurringCalendar items={active} month={month} today={today} />}
+
+      <Fab label="Novo fixo" onClick={() => setEditing('new')} />
+
+      <FormSheet open={Boolean(editing)} onOpenChange={(o) => !o && closeEditor()} title={isEdit ? 'Editar fixo' : 'Novo gasto fixo'}>
+        {editing && (
+          <RecurringForm
+            key={isEdit ? editing.id : 'new'}
+            initial={isEdit ? editing : {}}
+            defaultStartMonth={month}
+            saving={saveMutation.isPending}
+            onSubmit={(data) => saveMutation.mutate(data)}
+            onCancel={closeEditor}
+            onEnd={isEdit ? () => endMutation.mutate(editing) : undefined}
+            onDelete={isEdit ? () => setConfirmDelete(true) : undefined}
+          />
+        )}
+      </FormSheet>
+
+      <FormSheet open={Boolean(paying)} onOpenChange={(o) => !o && setPaying(null)} title={paying ? `Pagamento de ${paying.name}` : 'Pagamento'} description="Ajuste o valor se a conta variou este mês.">
+        {paying && (
+          <form onSubmit={confirmPayment} className="space-y-4" noValidate>
+            <MoneyInput id="valor-pago" label="Valor pago" value={paidValue} onChange={setPaidValue} error={paidError} />
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="outline" className="h-11" onClick={() => setPaying(null)}>Cancelar</Button>
+              <Button type="submit" className="h-11">Confirmar pagamento</Button>
+            </div>
+          </form>
+        )}
+      </FormSheet>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Excluir gasto fixo?"
+        description="Isso apaga também o histórico de pagamentos. Para parar de contar só daqui em diante, use Encerrar."
+        confirmLabel="Excluir"
+        destructive
+        onConfirm={() => isEdit && deleteMutation.mutate(editing.id)}
+      />
     </div>
   );
 }
