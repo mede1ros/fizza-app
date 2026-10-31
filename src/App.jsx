@@ -11,10 +11,13 @@ import Expenses from '@/pages/Expenses';
 import Goals from '@/pages/Goals';
 import Recurring from '@/pages/Recurring';
 import Shopping from '@/pages/Shopping';
+import Settings from '@/pages/Settings';
+import About from '@/pages/About';
+import { exportBackup } from '@/lib/backupActions';
 
 function App() {
   return (
-    <ErrorBoundary>
+    <ErrorBoundary onExport={exportBackup}>
       <QueryClientProvider client={queryClientInstance}>
         <MonthProvider>
           <Router>
@@ -25,6 +28,8 @@ function App() {
                 <Route path="/fixos" element={<Recurring />} />
                 <Route path="/metas" element={<Goals />} />
                 <Route path="/compras" element={<Shopping />} />
+                <Route path="/config" element={<Settings />} />
+                <Route path="/sobre" element={<About />} />
               </Route>
               <Route path="*" element={<PageNotFound />} />
             </Routes>
