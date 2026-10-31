@@ -1,6 +1,6 @@
 # Fizza MVP: design
 
-**Data:** 2026-10-30 · **Status:** aguardando aprovação
+**Data:** 2026-10-30 · **Status:** aprovado pelo usuário ("corrija como achar melhor")
 
 ## 1. Intenção
 
@@ -84,7 +84,7 @@ O código atual (React + Vite, exportado de um protótipo) já tem uma interface
 
 **Início**
 - Seletor de mês.
-- Cartões **Renda**, **Gastos** (variáveis + fixos do mês) e **Saldo**.
+- Cartões **Renda**, **Gastos** (variáveis + fixos do mês) e **Saldo**. Tocar em **Renda** abre o painel de **entradas do mês**: lista, adicionar, editar e excluir. Cada entrada é **fixa** (ex.: salário, repete todo mês a partir do mês de início até ser encerrada) ou **avulsa** (ex.: freelance, só na data informada).
 - **Pizza do mês** por categoria, com o percentual no gráfico ou numa legenda em lista (categoria · valor · %). A lista vem ordenada do maior para o menor e cada categoria tem **cor estável**.
 - Filtro da pizza: **Todos / Fixos / Variáveis**.
 - Histórico de 6 meses (barras Renda × Gastos), usando as mesmas regras de cálculo.
@@ -135,7 +135,7 @@ Tudo em `src/domain/`, sem React, com testes unitários.
 - **Valor de um fixo no mês M:** o valor pago naquele mês, se houver pagamento; senão, o valor previsto.
 - **Total do mês** = soma dos variáveis do mês + soma dos fixos ativos no mês.
 - **Pizza:** agrupa por categoria (comparação sem diferenciar maiúsculas/acentos; exibe o nome canônico). Os percentuais são calculados sobre o total do filtro. A soma exibida dos percentuais fecha em 100% (arredondamento pelo método do maior resto).
-- **Renda do mês:** o valor definido para o mês. Se não houver, usa a renda do mês anterior mais recente, marcada como "repetida do mês anterior", e o usuário pode confirmar ou editar. *(decisão do engenheiro, ver §8)*
+- **Renda do mês** = soma das entradas avulsas com data no mês + entradas fixas ativas no mês (mesma regra de ativo dos gastos fixos). *(decisão do engenheiro, ver §8)*
 - **Saldo** = renda − total do mês.
 - **Status de um fixo no mês atual:** pago / vence hoje / atrasado / próximo, conforme o dia de hoje. Para vencimentos 29–31 em meses curtos, conta o último dia do mês.
 
@@ -147,7 +147,7 @@ Todo registro tem `id`, `created_date` e `updated_date`. Valores em **centavos**
 |---|---|
 | `Expense` | `name`, `amount_cents`, `category`, `date` (AAAA-MM-DD, obrigatório), `notes?` |
 | `RecurringExpense` | `name`, `amount_cents`, `category`, `due_day`, `color?`, `notes?`, `start_month` (AAAA-MM), `end_month?`, `payments: { "AAAA-MM": { paid_at, amount_cents } }` |
-| `MonthlyBudget` | `month_year`, `income_cents` |
+| `Income` | `name`, `amount_cents`, `kind` (`fixed` ou `once`), `date` (avulsa: AAAA-MM-DD), `start_month` e `end_month?` (fixa) |
 | `FinancialGoal` | `title`, `target_cents`, `saved_cents`, `deadline?`, `status`, `notes?` |
 | `ShoppingItem` | `name`, `budget_cents?`, `category?`, `priority`, `purchased`, `notes?` |
 | `Category` | `name`, `color`. As padrão vêm pré-cadastradas, cada uma com cor fixa; as personalizadas são criadas pelo usuário. |
@@ -158,6 +158,7 @@ Mudanças em relação ao modelo atual:
 - `is_paid_this_month`/`paid_month_year` dão lugar a `payments`.
 - Os valores passam a ser em centavos.
 - Surgem `Category` e `Meta`.
+- `MonthlyBudget` dá lugar a `Income`. Na migração, cada `MonthlyBudget` vira uma entrada **avulsa** "Renda" no dia 1 do mês, com o mesmo valor.
 
 ### 6.5 Armazenamento
 
@@ -186,7 +187,7 @@ Mudanças em relação ao modelo atual:
   - `src/domain/` (regras puras), `src/api/` (dados), `src/features/<área>/` (telas e componentes de cada área), `src/components/` (compartilhados), `src/lib/` (utilitários, como `formatMoney`).
   - Uma função de formatação e um parser de dinheiro únicos, em vez das cópias espalhadas hoje.
 - **Testes (Vitest):**
-  - regras de negócio de §6.3: dinheiro, totais, fixos ativos, pizza com percentuais fechando em 100%, renda repetida;
+  - regras de negócio de §6.3: dinheiro, totais, fixos ativos, pizza com percentuais fechando em 100%, renda (entradas fixas e avulsas);
   - migração v1→v2;
   - validação de backup;
   - testes de componente (Testing Library) para os fluxos principais: adicionar gasto, marcar fixo como pago, importar backup.
@@ -232,7 +233,7 @@ Mudanças em relação ao modelo atual:
 
 - **PWA + IndexedDB + HashRouter**, como explicado em §3 e §6.5.
 - **Valores em centavos** para evitar erros de arredondamento.
-- **Renda repetida do mês anterior** quando o mês não tem renda definida.
+- **Renda em entradas** fixas ou avulsas, em vez de um valor único por mês. Cobre salário + extras sem tela nova (pergunta delegada pelo usuário).
 - **Fixos com início/fim e histórico de pagamentos**, permitindo ajustar o valor pago.
 - **Notificações removidas** do MVP; em troca, há destaques "Vence hoje/Atrasado" dentro do app.
 - **Backlog em `docs/BACKLOG.md`**, em vez de GitHub Issues, para não depender de ferramentas externas. Pode ser espelhado em Issues depois.
