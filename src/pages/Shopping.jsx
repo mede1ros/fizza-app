@@ -1,278 +1,212 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Check, Circle } from 'lucide-react';
 import { db } from '@/api/db';
-import { PlusCircle, Trash2, Edit2, Check, X, ShoppingCart } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatMoney, parseMoney, centsToInput } from '@/domain/money';
+import { todayISO } from '@/domain/months';
+import FormSheet from '@/components/FormSheet';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import MoneyInput from '@/components/MoneyInput';
+import CategoryPicker from '@/components/CategoryPicker';
+import Fab from '@/components/Fab';
+import ExpenseForm from '@/components/expenses/ExpenseForm';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { toast } from '@/components/ui/use-toast';
+import { cn } from '@/lib/utils';
 
-const formatCurrency = (v) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
+const PRIORITIES = [['baixa', 'Baixa'], ['média', 'Média'], ['alta', 'Alta']];
+const PRIORITY_ORDER = { alta: 0, 'média': 1, baixa: 2 };
+const PRIORITY_STYLE = { alta: 'bg-red-100 text-red-700', 'média': 'bg-amber-100 text-amber-700', baixa: 'bg-secondary text-muted-foreground' };
 
-const SUGGESTED_CATEGORIES = [
-  'Lazer', 'Eletrônicos', 'Vestuário', 'Alimentação', 'Casa',
-  'Saúde', 'Educação', 'Transporte', 'Outros'
-];
+function ItemForm({ initial = {}, onSubmit, onCancel, onDelete, saving }) {
+  const [name, setName] = useState(initial.name || '');
+  const [budget, setBudget] = useState(centsToInput(initial.budget_cents));
+  const [category, setCategory] = useState(initial.category || '');
+  const [priority, setPriority] = useState(initial.priority || 'média');
+  const [notes, setNotes] = useState(initial.notes || '');
+  const [errors, setErrors] = useState({});
 
-const PRIORITY_COLORS = {
-  baixa: 'bg-secondary text-secondary-foreground',
-  média: 'bg-amber-100 text-amber-700',
-  alta: 'bg-red-100 text-red-600',
-};
-
-const emptyForm = { name: '', budget: '', category: '', priority: 'média', notes: '' };
-
-export default function Shopping() {
-  const qc = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyForm);
-  const [editId, setEditId] = useState(null);
-  const [editData, setEditData] = useState({});
-
-  const { data: items = [], isLoading } = useQuery({
-    queryKey: ['shopping'],
-    queryFn: () => db.entities.ShoppingItem.list('-created_date'),
-  });
-
-  const pending = items.filter(i => !i.purchased);
-  const purchased = items.filter(i => i.purchased);
-  const totalBudget = pending.reduce((s, i) => s + (i.budget || 0), 0);
-
-  const createMutation = useMutation({
-    mutationFn: (data) => db.entities.ShoppingItem.create({
-      ...data,
-      budget: data.budget ? parseFloat(String(data.budget).replace(',', '.')) : null,
-      purchased: false,
-    }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['shopping'] }); setForm(emptyForm); setShowForm(false); },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => db.entities.ShoppingItem.update(id, {
-      ...data,
-      budget: data.budget ? parseFloat(String(data.budget).replace(',', '.')) : null,
-    }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['shopping'] }); setEditId(null); },
-  });
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, purchased }) => db.entities.ShoppingItem.update(id, { purchased }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['shopping'] }),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => db.entities.ShoppingItem.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['shopping'] }),
-  });
-
-  const handleSubmit = (e) => {
+  const submit = (e) => {
     e.preventDefault();
-    if (!form.name) return;
-    createMutation.mutate(form);
+    const money = budget.trim() ? parseMoney(budget) : { ok: true, cents: null };
+    const next = {};
+    if (!name.trim()) next.name = 'Informe o nome';
+    if (!money.ok) next.budget = money.error;
+    setErrors(next);
+    if (Object.keys(next).length) return;
+    onSubmit({ name: name.trim(), budget_cents: money.cents, category: category || null, priority, notes: notes.trim() });
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">Lista de Compras</h1>
-          <p className="text-muted-foreground text-sm">
-            {pending.length} {pending.length === 1 ? 'item pendente' : 'itens pendentes'}
-            {totalBudget > 0 && ` · Orçamento: ${formatCurrency(totalBudget)}`}
-          </p>
-        </div>
-        <Button onClick={() => setShowForm(!showForm)} className="gap-2">
-          <PlusCircle className="w-4 h-4" />
-          <span className="hidden sm:inline">Adicionar Item</span>
-        </Button>
+    <form onSubmit={submit} className="space-y-4" noValidate>
+      <div>
+        <label htmlFor="item-nome" className="text-xs text-muted-foreground mb-1 block">Nome</label>
+        <Input id="item-nome" placeholder="Ex.: Tênis, Fone" value={name} onChange={(e) => setName(e.target.value)} className="h-11 text-base" />
+        {errors.name && <p className="text-xs text-destructive mt-1">{errors.name}</p>}
       </div>
-
-      {/* Form */}
-      {showForm && (
-        <Card className="border-primary/30 shadow-md">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Novo Item</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Nome *</label>
-                  <Input placeholder="Ex: Violão novo" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Orçamento (R$)</label>
-                  <Input placeholder="0,00" value={form.budget} onChange={e => setForm(f => ({ ...f, budget: e.target.value }))} />
-                </div>
-              </div>
-
-              {/* Category */}
-              <div>
-                <label className="text-xs text-muted-foreground mb-2 block">Categoria</label>
-                <div className="flex flex-wrap gap-2">
-                  {SUGGESTED_CATEGORIES.map(cat => (
-                    <button key={cat} type="button" onClick={() => setForm(f => ({ ...f, category: cat }))}
-                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${form.category === cat ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-secondary-foreground border-border hover:border-primary/50'}`}>
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Priority */}
-              <div>
-                <label className="text-xs text-muted-foreground mb-2 block">Prioridade</label>
-                <div className="flex gap-2">
-                  {['baixa', 'média', 'alta'].map(p => (
-                    <button key={p} type="button" onClick={() => setForm(f => ({ ...f, priority: p }))}
-                      className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors capitalize ${form.priority === p ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-secondary-foreground border-border'}`}>
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Observações</label>
-                <Input placeholder="Opcional..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-              </div>
-
-              <div className="flex gap-2 justify-end">
-                <Button type="button" variant="ghost" onClick={() => { setShowForm(false); setForm(emptyForm); }}>Cancelar</Button>
-                <Button type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? 'Salvando...' : 'Adicionar'}</Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Pending Items */}
-      {isLoading ? (
-        <p className="text-center text-muted-foreground py-8 text-sm">Carregando...</p>
-      ) : items.length === 0 ? (
-        <Card className="border-dashed border-border shadow-sm">
-          <CardContent className="p-10 text-center">
-            <ShoppingCart className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-40" />
-            <p className="text-muted-foreground text-sm">Sua lista está vazia.</p>
-            <p className="text-xs text-muted-foreground mt-1">Clique em <strong>Adicionar Item</strong> para começar!</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {pending.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">🛒 Pendentes</p>
-              <div className="space-y-2">
-                {pending.map(item => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    editId={editId}
-                    editData={editData}
-                    setEditId={setEditId}
-                    setEditData={setEditData}
-                    onToggle={(id) => toggleMutation.mutate({ id, purchased: true })}
-                    onUpdate={(id, data) => updateMutation.mutate({ id, data })}
-                    onDelete={(id) => deleteMutation.mutate(id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {purchased.length > 0 && (
-            <div className="opacity-60">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">✅ Comprados</p>
-              <div className="space-y-2">
-                {purchased.map(item => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    editId={editId}
-                    editData={editData}
-                    setEditId={setEditId}
-                    setEditData={setEditData}
-                    onToggle={(id) => toggleMutation.mutate({ id, purchased: false })}
-                    onUpdate={(id, data) => updateMutation.mutate({ id, data })}
-                    onDelete={(id) => deleteMutation.mutate(id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+      <MoneyInput id="item-orcamento" label="Orçamento" placeholder="Opcional" value={budget} onChange={setBudget} error={errors.budget} />
+      <CategoryPicker value={category} onChange={setCategory} />
+      <fieldset>
+        <legend className="text-xs text-muted-foreground mb-2">Prioridade</legend>
+        <div className="grid grid-cols-3 gap-2">
+          {PRIORITIES.map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={priority === value} onClick={() => setPriority(value)}
+              className={cn('h-10 rounded-xl border text-xs font-medium', priority === value ? 'bg-primary text-primary-foreground border-primary' : 'border-border')}>
+              {label}
+            </button>
+          ))}
         </div>
-      )}
-    </div>
+      </fieldset>
+      <div>
+        <label htmlFor="item-obs" className="text-xs text-muted-foreground mb-1 block">Observação</label>
+        <Input id="item-obs" placeholder="Opcional" value={notes} onChange={(e) => setNotes(e.target.value)} className="h-11 text-base" />
+      </div>
+      <div className="flex gap-2 pt-1">
+        {onDelete && <Button type="button" variant="ghost" className="h-11 text-destructive mr-auto" onClick={onDelete}>Excluir</Button>}
+        <Button type="button" variant="outline" className="h-11 ml-auto" onClick={onCancel}>Cancelar</Button>
+        <Button type="submit" className="h-11" disabled={saving}>Salvar</Button>
+      </div>
+    </form>
   );
 }
 
-function ItemRow({ item, editId, editData, setEditId, setEditData, onToggle, onUpdate, onDelete }) {
-  const isEditing = editId === item.id;
+export default function Shopping() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [askExpense, setAskExpense] = useState(null); // item recém-comprado
+  const [expenseFrom, setExpenseFrom] = useState(null);
 
-  const PRIORITY_COLORS = {
-    baixa: 'bg-secondary text-secondary-foreground',
-    média: 'bg-amber-100 text-amber-700',
-    alta: 'bg-red-100 text-red-600',
-  };
+  const { data: items = [], isLoading } = useQuery({ queryKey: ['shopping'], queryFn: () => db.entities.ShoppingItem.list('-created_date') });
+
+  const pending = items.filter((i) => !i.purchased).sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
+  const purchased = items.filter((i) => i.purchased);
+  const totalBudget = pending.reduce((s, i) => s + (i.budget_cents || 0), 0);
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['shopping'] });
+  const onError = () => toast({ title: 'Não foi possível salvar', variant: 'destructive' });
+  const close = () => { setEditing(null); setConfirmDelete(false); };
+  const isEdit = editing && editing !== 'new';
+
+  const save = useMutation({
+    mutationFn: (data) => (isEdit ? db.entities.ShoppingItem.update(editing.id, data) : db.entities.ShoppingItem.create({ ...data, purchased: false })),
+    onSuccess: () => { invalidate(); close(); },
+    onError,
+  });
+  const toggle = useMutation({
+    mutationFn: ({ item, value }) => db.entities.ShoppingItem.update(item.id, { purchased: value }),
+    onSuccess: (item) => { invalidate(); if (item.purchased) setAskExpense(item); },
+    onError,
+  });
+  const remove = useMutation({
+    mutationFn: (id) => db.entities.ShoppingItem.delete(id),
+    onSuccess: () => { invalidate(); close(); },
+    onError,
+  });
+  const createExpense = useMutation({
+    mutationFn: (data) => db.entities.Expense.create(data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['expenses'] }); setExpenseFrom(null); toast({ title: 'Gasto registrado' }); },
+    onError,
+  });
+
+  const renderItem = (item) => (
+    <li key={item.id} className="flex items-center gap-2 pl-2 pr-3 min-h-[60px]">
+      <button
+        type="button"
+        aria-label={item.purchased ? `Desmarcar ${item.name}` : `Marcar ${item.name} como comprado`}
+        onClick={() => toggle.mutate({ item, value: !item.purchased })}
+        className="h-11 w-11 flex items-center justify-center rounded-full"
+      >
+        {item.purchased ? <Check className="w-5 h-5 text-primary" /> : <Circle className="w-5 h-5 text-muted-foreground" />}
+      </button>
+      <button type="button" aria-label={`Editar ${item.name}`} onClick={() => setEditing(item)} className="flex-1 flex items-center gap-2 min-w-0 text-left min-h-[56px]">
+        <span className="flex-1 min-w-0">
+          <span className={cn('block text-sm font-medium truncate', item.purchased && 'line-through text-muted-foreground')}>{item.name}</span>
+          <span className="block text-xs text-muted-foreground truncate">{item.category || 'Sem categoria'}{item.notes ? ` · ${item.notes}` : ''}</span>
+        </span>
+        {!item.purchased && <span className={cn('text-[11px] px-2 py-0.5 rounded-full', PRIORITY_STYLE[item.priority])}>{item.priority}</span>}
+        {item.budget_cents ? <span className="text-sm font-semibold">{formatMoney(item.budget_cents)}</span> : null}
+      </button>
+    </li>
+  );
 
   return (
-    <Card className={`border shadow-sm ${item.purchased ? 'border-border' : 'border-border'}`}>
-      <CardContent className="p-4 flex items-center gap-3">
-        {isEditing ? (
-          <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Input value={editData.name || ''} onChange={e => setEditData(d => ({ ...d, name: e.target.value }))} className="h-8 text-sm" placeholder="Nome" />
-            <Input value={editData.budget || ''} onChange={e => setEditData(d => ({ ...d, budget: e.target.value }))} className="h-8 text-sm" placeholder="Orçamento" />
-            <Input value={editData.category || ''} onChange={e => setEditData(d => ({ ...d, category: e.target.value }))} className="h-8 text-sm" placeholder="Categoria" />
-            <div className="flex gap-1">
-              <Button size="icon" className="h-8 w-8" onClick={() => onUpdate(item.id, editData)}><Check className="w-3 h-3" /></Button>
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditId(null)}><X className="w-3 h-3" /></Button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <button
-              onClick={() => onToggle(item.id)}
-              className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${item.purchased ? 'bg-primary border-primary text-primary-foreground' : 'border-border hover:border-primary'}`}
-            >
-              {item.purchased && <Check className="w-3 h-3" />}
-            </button>
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">Lista de Compras</h1>
+        <p className="text-sm text-muted-foreground">Planeje antes de comprar.</p>
+      </div>
 
-            <div className="flex-1 min-w-0">
-              <p className={`text-sm font-medium truncate ${item.purchased ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
-                {item.name}
-              </p>
-              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                {item.category && <Badge variant="secondary" className="text-xs px-1.5 py-0">{item.category}</Badge>}
-                {item.priority && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${PRIORITY_COLORS[item.priority] || ''}`}>
-                    {item.priority}
-                  </span>
-                )}
-                {item.notes && <span className="text-xs text-muted-foreground truncate">{item.notes}</span>}
-              </div>
-            </div>
+      <div className="flex items-center justify-between rounded-2xl bg-secondary/60 px-4 py-3">
+        <span className="text-sm text-muted-foreground">Orçamento pendente</span>
+        <span className="text-base font-bold">{formatMoney(totalBudget)}</span>
+      </div>
 
-            {item.budget > 0 && (
-              <span className="text-sm font-semibold text-foreground flex-shrink-0">
-                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(item.budget)}
-              </span>
-            )}
+      {isLoading ? (
+        <p className="text-center text-muted-foreground py-8 text-sm">Carregando…</p>
+      ) : items.length === 0 ? (
+        <p className="text-center text-sm text-muted-foreground py-12">Lista vazia. Toque em + para adicionar.</p>
+      ) : (
+        <>
+          {pending.length > 0 && (
+            <section aria-label="A comprar">
+              <h2 className="text-xs font-semibold text-muted-foreground mb-1 px-1">A comprar ({pending.length})</h2>
+              <ul className="rounded-2xl border border-border bg-card divide-y divide-border">{pending.map(renderItem)}</ul>
+            </section>
+          )}
+          {purchased.length > 0 && (
+            <section aria-label="Comprados">
+              <h2 className="text-xs font-semibold text-muted-foreground mb-1 px-1">Comprados ({purchased.length})</h2>
+              <ul className="rounded-2xl border border-border bg-card divide-y divide-border">{purchased.map(renderItem)}</ul>
+            </section>
+          )}
+        </>
+      )}
 
-            <div className="flex gap-1 flex-shrink-0">
-              <button onClick={() => { setEditId(item.id); setEditData({ name: item.name, budget: item.budget ? String(item.budget) : '', category: item.category || '', notes: item.notes || '' }); }}
-                className="p-1.5 text-muted-foreground hover:text-primary rounded-lg hover:bg-secondary transition-colors">
-                <Edit2 className="w-3.5 h-3.5" />
-              </button>
-              <button onClick={() => onDelete(item.id)}
-                className="p-1.5 text-muted-foreground hover:text-destructive rounded-lg hover:bg-destructive/10 transition-colors">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </>
+      <Fab label="Novo item" onClick={() => setEditing('new')} />
+
+      <FormSheet open={Boolean(editing)} onOpenChange={(o) => !o && close()} title={isEdit ? 'Editar item' : 'Novo item'}>
+        {editing && (
+          <ItemForm
+            key={isEdit ? editing.id : 'new'}
+            initial={isEdit ? editing : {}}
+            saving={save.isPending}
+            onSubmit={(data) => save.mutate(data)}
+            onCancel={close}
+            onDelete={isEdit ? () => setConfirmDelete(true) : undefined}
+          />
         )}
-      </CardContent>
-    </Card>
+      </FormSheet>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Excluir item?"
+        confirmLabel="Excluir"
+        destructive
+        onConfirm={() => isEdit && remove.mutate(editing.id)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(askExpense)}
+        onOpenChange={(o) => !o && setAskExpense(null)}
+        title="Registrar como gasto?"
+        description={askExpense ? `Lançar "${askExpense.name}" nos gastos de hoje.` : undefined}
+        confirmLabel="Registrar gasto"
+        onConfirm={() => { setExpenseFrom(askExpense); setAskExpense(null); }}
+      />
+
+      <FormSheet open={Boolean(expenseFrom)} onOpenChange={(o) => !o && setExpenseFrom(null)} title="Registrar gasto">
+        {expenseFrom && (
+          <ExpenseForm
+            initial={{ name: expenseFrom.name, amount_cents: expenseFrom.budget_cents, category: expenseFrom.category || 'Outros', date: todayISO() }}
+            saving={createExpense.isPending}
+            onSubmit={(data) => createExpense.mutate(data)}
+            onCancel={() => setExpenseFrom(null)}
+          />
+        )}
+      </FormSheet>
+    </div>
   );
 }

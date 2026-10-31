@@ -1,242 +1,201 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Lightbulb, ChevronRight } from 'lucide-react';
 import { db } from '@/api/db';
-import { format } from 'date-fns';
-import { PlusCircle, Trash2, Edit2, Check, X, Lightbulb } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatMoney, parseMoney, centsToInput } from '@/domain/money';
+import { currentMonth, monthLabel } from '@/domain/months';
+import { categoryBreakdown } from '@/domain/finance';
+import { useCategories } from '@/components/CategoryPicker';
+import FormSheet from '@/components/FormSheet';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import MoneyInput from '@/components/MoneyInput';
+import Fab from '@/components/Fab';
 import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/use-toast';
+import { cn } from '@/lib/utils';
 
-const formatCurrency = (v) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
+const STATUS = [['active', 'Ativa'], ['paused', 'Pausada'], ['completed', 'Concluída']];
 
-const currentMonth = format(new Date(), 'yyyy-MM');
+const monthsUntil = (deadline, fromMonth) => {
+  const [dy, dm] = deadline.split('-').map(Number);
+  const [cy, cm] = fromMonth.split('-').map(Number);
+  return Math.max(1, (dy - cy) * 12 + (dm - cm));
+};
 
-const emptyForm = { title: '', target_amount: '', saved_amount: '', deadline: '', notes: '' };
-
-function GoalSuggestion({ goal, expenses }) {
-  const monthExpenses = expenses.filter(e => e.month_year === currentMonth);
-  const totalExpenses = monthExpenses.reduce((s, e) => s + (e.amount || 0), 0);
-
-  const remaining = (goal.target_amount || 0) - (goal.saved_amount || 0);
-  if (remaining <= 0) return null;
-
-  // Calculate months until deadline
-  let months = 3;
-  if (goal.deadline) {
-    const [y, m] = goal.deadline.split('-').map(Number);
-    const now = new Date();
-    months = Math.max(1, (y - now.getFullYear()) * 12 + (m - now.getMonth()));
-  }
-
-  const monthlyNeeded = remaining / months;
-  const lazerExpenses = monthExpenses.filter(e => e.category?.toLowerCase() === 'lazer').reduce((s, e) => s + (e.amount || 0), 0);
-  const lazerPct = totalExpenses > 0 ? (lazerExpenses / totalExpenses) * 100 : 0;
-
-  const suggestion = lazerPct > 20
-    ? `Para atingir sua meta de ${formatCurrency(goal.target_amount)} em ${months} ${months === 1 ? 'mês' : 'meses'}, guarde ${formatCurrency(monthlyNeeded)}/mês. Que tal reduzir gastos com Lazer em 10%? Isso economizaria ${formatCurrency(lazerExpenses * 0.1)}/mês! 💡`
-    : `Para atingir sua meta de ${formatCurrency(goal.target_amount)} em ${months} ${months === 1 ? 'mês' : 'meses'}, você precisa guardar ${formatCurrency(monthlyNeeded)}/mês. Continue assim! 🚀`;
+function GoalTip({ goal, expenses, recurring, categories }) {
+  const remaining = (goal.target_cents || 0) - (goal.saved_cents || 0);
+  if (remaining <= 0 || goal.status !== 'active' || !goal.deadline) return null;
+  const month = currentMonth();
+  const months = monthsUntil(goal.deadline, month);
+  const monthly = Math.ceil(remaining / months);
+  const [top] = categoryBreakdown({ expenses, recurring }, month, 'variable', categories);
 
   return (
-    <div className="flex gap-2 bg-accent/10 border border-accent/30 rounded-xl p-3 mt-3">
-      <Lightbulb className="w-4 h-4 text-accent flex-shrink-0 mt-0.5" />
-      <p className="text-xs text-foreground/80">{suggestion}</p>
+    <div data-testid="dica-meta" className="flex gap-2 bg-amber-50 border border-amber-200 rounded-xl p-3 mt-3 text-xs text-amber-900">
+      <Lightbulb className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
+      <p>
+        Para chegar lá até {monthLabel(goal.deadline)}, guarde {formatMoney(monthly)}/mês.
+        {top && ` Seu maior gasto variável este mês é ${top.name} (${formatMoney(top.cents)}); cortar 10% liberaria ${formatMoney(Math.round(top.cents * 0.1))}/mês.`}
+      </p>
     </div>
+  );
+}
+
+function GoalForm({ initial = {}, onSubmit, onCancel, onDelete, saving }) {
+  const [title, setTitle] = useState(initial.title || '');
+  const [target, setTarget] = useState(centsToInput(initial.target_cents));
+  const [saved, setSaved] = useState(centsToInput(initial.saved_cents));
+  const [deadline, setDeadline] = useState(initial.deadline || '');
+  const [notes, setNotes] = useState(initial.notes || '');
+  const [status, setStatus] = useState(initial.status || 'active');
+  const [errors, setErrors] = useState({});
+
+  const submit = (e) => {
+    e.preventDefault();
+    const t = parseMoney(target);
+    const s = saved.trim() ? parseMoney(saved) : { ok: true, cents: 0 };
+    const next = {};
+    if (!title.trim()) next.title = 'Informe o título';
+    if (!t.ok) next.target = t.error;
+    if (!s.ok) next.saved = s.error;
+    setErrors(next);
+    if (Object.keys(next).length) return;
+    onSubmit({ title: title.trim(), target_cents: t.cents, saved_cents: s.cents, deadline: deadline || null, notes: notes.trim(), status });
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4" noValidate>
+      <div>
+        <label htmlFor="meta-titulo" className="text-xs text-muted-foreground mb-1 block">Título</label>
+        <Input id="meta-titulo" placeholder="Ex.: Viagem, Reserva de emergência" value={title} onChange={(e) => setTitle(e.target.value)} className="h-11 text-base" />
+        {errors.title && <p className="text-xs text-destructive mt-1">{errors.title}</p>}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <MoneyInput id="meta-alvo" label="Valor alvo" value={target} onChange={setTarget} error={errors.target} />
+        <MoneyInput id="meta-guardado" label="Já guardei" value={saved} onChange={setSaved} error={errors.saved} />
+      </div>
+      <div>
+        <label htmlFor="meta-prazo" className="text-xs text-muted-foreground mb-1 block">Prazo (mês)</label>
+        <Input id="meta-prazo" type="month" value={deadline} onChange={(e) => setDeadline(e.target.value)} className="h-11 text-base" />
+      </div>
+      <fieldset>
+        <legend className="text-xs text-muted-foreground mb-2">Status</legend>
+        <div className="grid grid-cols-3 gap-2">
+          {STATUS.map(([value, label]) => (
+            <button key={value} type="button" aria-pressed={status === value} onClick={() => setStatus(value)}
+              className={cn('h-10 rounded-xl border text-xs font-medium', status === value ? 'bg-primary text-primary-foreground border-primary' : 'border-border')}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+      <div>
+        <label htmlFor="meta-notas" className="text-xs text-muted-foreground mb-1 block">Anotações</label>
+        <Textarea id="meta-notas" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="text-base" />
+      </div>
+      <div className="flex gap-2 pt-1">
+        {onDelete && <Button type="button" variant="ghost" className="h-11 text-destructive mr-auto" onClick={onDelete}>Excluir</Button>}
+        <Button type="button" variant="outline" className="h-11 ml-auto" onClick={onCancel}>Cancelar</Button>
+        <Button type="submit" className="h-11" disabled={saving}>Salvar</Button>
+      </div>
+    </form>
   );
 }
 
 export default function Goals() {
   const qc = useQueryClient();
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyForm);
-  const [editId, setEditId] = useState(null);
-  const [editData, setEditData] = useState({});
+  const [editing, setEditing] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const { data: goals = [], isLoading } = useQuery({
-    queryKey: ['goals'],
-    queryFn: () => db.entities.FinancialGoal.list(),
+  const { data: goals = [], isLoading } = useQuery({ queryKey: ['goals'], queryFn: () => db.entities.FinancialGoal.list() });
+  const { data: expenses = [] } = useQuery({ queryKey: ['expenses'], queryFn: () => db.entities.Expense.list('-date') });
+  const { data: recurring = [] } = useQuery({ queryKey: ['recurring'], queryFn: () => db.entities.RecurringExpense.list('due_day') });
+  const { data: categories = [] } = useCategories();
+
+  const close = () => { setEditing(null); setConfirmDelete(false); };
+  const onError = () => toast({ title: 'Não foi possível salvar', variant: 'destructive' });
+  const isEdit = editing && editing !== 'new';
+
+  const save = useMutation({
+    mutationFn: (data) => (isEdit ? db.entities.FinancialGoal.update(editing.id, data) : db.entities.FinancialGoal.create(data)),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['goals'] }); close(); },
+    onError,
   });
-
-  const { data: expenses = [] } = useQuery({
-    queryKey: ['expenses'],
-    queryFn: () => db.entities.Expense.list(),
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data) => db.entities.FinancialGoal.create({
-      ...data,
-      target_amount: parseFloat(String(data.target_amount).replace(',', '.')),
-      saved_amount: parseFloat(String(data.saved_amount || 0).replace(',', '.')),
-      status: 'active',
-    }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['goals'] }); setForm(emptyForm); setShowForm(false); },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => db.entities.FinancialGoal.update(id, {
-      ...data,
-      target_amount: parseFloat(String(data.target_amount).replace(',', '.')),
-      saved_amount: parseFloat(String(data.saved_amount || 0).replace(',', '.')),
-    }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['goals'] }); setEditId(null); },
-  });
-
-  const deleteMutation = useMutation({
+  const remove = useMutation({
     mutationFn: (id) => db.entities.FinancialGoal.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['goals'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['goals'] }); close(); },
+    onError,
   });
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!form.title || !form.target_amount) return;
-    createMutation.mutate(form);
-  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-heading text-2xl font-bold text-foreground">Minhas Metas</h1>
-          <p className="text-muted-foreground text-sm">Planeje e acompanhe seus objetivos financeiros</p>
-        </div>
-        <Button onClick={() => setShowForm(!showForm)} className="gap-2">
-          <PlusCircle className="w-4 h-4" />
-          Nova Meta
-        </Button>
+    <div className="space-y-4">
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">Minhas Metas</h1>
+        <p className="text-sm text-muted-foreground">Planeje e acompanhe seus objetivos.</p>
       </div>
 
-      {/* Form */}
-      {showForm && (
-        <Card className="border-primary/30 shadow-md">
-          <CardHeader className="pb-3">
-            <CardTitle className="font-heading text-base">Criar Nova Meta</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Título da meta *</label>
-                  <Input placeholder="Ex: Viagem para a praia" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Valor alvo (R$) *</label>
-                  <Input placeholder="0,00" value={form.target_amount} onChange={e => setForm(f => ({ ...f, target_amount: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Já guardei (R$)</label>
-                  <Input placeholder="0,00" value={form.saved_amount} onChange={e => setForm(f => ({ ...f, saved_amount: e.target.value }))} />
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Prazo (mês/ano)</label>
-                  <Input type="month" value={form.deadline} onChange={e => setForm(f => ({ ...f, deadline: e.target.value }))} />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Anotações</label>
-                <Textarea placeholder="Detalhes, motivações..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} rows={2} />
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button type="button" variant="ghost" onClick={() => { setShowForm(false); setForm(emptyForm); }}>Cancelar</Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? 'Salvando...' : 'Criar Meta'}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Goals List */}
       {isLoading ? (
-        <p className="text-center text-muted-foreground py-8 text-sm">Carregando...</p>
+        <p className="text-center text-muted-foreground py-8 text-sm">Carregando…</p>
       ) : goals.length === 0 ? (
-        <Card className="border-dashed border-border shadow-sm">
-          <CardContent className="p-10 text-center">
-            <p className="text-muted-foreground text-sm">Nenhuma meta criada ainda.</p>
-            <p className="text-xs text-muted-foreground mt-1">Clique em <strong>Nova Meta</strong> para começar!</p>
-          </CardContent>
-        </Card>
+        <p className="text-center text-sm text-muted-foreground py-12">Nenhuma meta ainda. Toque em + para criar.</p>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {goals.map(goal => {
-            const pct = goal.target_amount > 0
-              ? Math.min(100, ((goal.saved_amount || 0) / goal.target_amount) * 100)
-              : 0;
-            const remaining = (goal.target_amount || 0) - (goal.saved_amount || 0);
-            const isCompleted = pct >= 100;
-
+        <ul className="space-y-3">
+          {goals.map((goal) => {
+            const pct = goal.target_cents > 0 ? Math.min(100, ((goal.saved_cents || 0) / goal.target_cents) * 100) : 0;
+            const done = pct >= 100 || goal.status === 'completed';
             return (
-              <Card key={goal.id} className={`border shadow-sm ${isCompleted ? 'border-primary/40 bg-primary/5' : 'border-border'}`}>
-                <CardContent className="p-5">
-                  {editId === goal.id ? (
-                    <div className="space-y-2">
-                      <Input value={editData.title || ''} onChange={e => setEditData(d => ({ ...d, title: e.target.value }))} className="h-8 text-sm" placeholder="Título" />
-                      <div className="grid grid-cols-2 gap-2">
-                        <Input value={editData.target_amount || ''} onChange={e => setEditData(d => ({ ...d, target_amount: e.target.value }))} className="h-8 text-sm" placeholder="Meta R$" />
-                        <Input value={editData.saved_amount || ''} onChange={e => setEditData(d => ({ ...d, saved_amount: e.target.value }))} className="h-8 text-sm" placeholder="Guardado R$" />
-                      </div>
-                      <Input type="month" value={editData.deadline || ''} onChange={e => setEditData(d => ({ ...d, deadline: e.target.value }))} className="h-8 text-sm" />
-                      <Textarea value={editData.notes || ''} onChange={e => setEditData(d => ({ ...d, notes: e.target.value }))} rows={2} className="text-sm" placeholder="Anotações" />
-                      <div className="flex gap-1 justify-end">
-                        <Button size="icon" className="h-8 w-8" onClick={() => updateMutation.mutate({ id: goal.id, data: editData })}>
-                          <Check className="w-3 h-3" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditId(null)}>
-                          <X className="w-3 h-3" />
-                        </Button>
-                      </div>
+              <li key={goal.id} className={cn('rounded-2xl border bg-card p-4', done ? 'border-primary/40' : 'border-border')}>
+                <button type="button" aria-label={`Editar ${goal.title}`} onClick={() => setEditing(goal)} className="w-full text-left">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm text-foreground">{goal.title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {goal.deadline ? `Até ${monthLabel(goal.deadline)}` : 'Sem prazo'}
+                        {goal.status === 'paused' ? ' · pausada' : ''}{done ? ' · concluída 🎉' : ''}
+                      </p>
                     </div>
-                  ) : (
-                    <>
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <h3 className="font-semibold text-foreground text-sm">{goal.title}</h3>
-                          {goal.deadline && (
-                            <p className="text-xs text-muted-foreground mt-0.5">Prazo: {goal.deadline}</p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          {isCompleted && <Badge className="bg-primary text-primary-foreground text-xs">Concluída! 🎉</Badge>}
-                          <button onClick={() => { setEditId(goal.id); setEditData({ title: goal.title, target_amount: String(goal.target_amount), saved_amount: String(goal.saved_amount || 0), deadline: goal.deadline || '', notes: goal.notes || '' }); }} className="p-1.5 text-muted-foreground hover:text-primary rounded-lg hover:bg-secondary transition-colors">
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => deleteMutation.mutate(goal.id)} className="p-1.5 text-muted-foreground hover:text-destructive rounded-lg hover:bg-destructive/10 transition-colors">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex justify-between text-sm mb-2">
-                        <span className="text-muted-foreground">Guardado</span>
-                        <span className="font-medium text-foreground">{formatCurrency(goal.saved_amount)} / {formatCurrency(goal.target_amount)}</span>
-                      </div>
-
-                      <div className="w-full bg-secondary rounded-full h-2.5 mb-1">
-                        <div
-                          className={`h-2.5 rounded-full transition-all ${isCompleted ? 'bg-accent' : 'bg-primary'}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <div className="flex justify-between text-xs text-muted-foreground mb-2">
-                        <span>{pct.toFixed(0)}% concluído</span>
-                        {!isCompleted && <span>Falta {formatCurrency(remaining)}</span>}
-                      </div>
-
-                      {goal.notes && (
-                        <p className="text-xs text-muted-foreground bg-secondary rounded-lg p-2 mt-2">{goal.notes}</p>
-                      )}
-
-                      <GoalSuggestion goal={goal} expenses={expenses} />
-                    </>
-                  )}
-                </CardContent>
-              </Card>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                  </div>
+                  <div className="flex justify-between text-xs mt-3 mb-1">
+                    <span className="text-muted-foreground">{formatMoney(goal.saved_cents)} de {formatMoney(goal.target_cents)}</span>
+                    <span className="font-medium text-primary">{pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2">
+                    <div className="h-2 rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                  </div>
+                </button>
+                <GoalTip goal={goal} expenses={expenses} recurring={recurring} categories={categories} />
+              </li>
             );
           })}
-        </div>
+        </ul>
       )}
+
+      <Fab label="Nova meta" onClick={() => setEditing('new')} />
+
+      <FormSheet open={Boolean(editing)} onOpenChange={(o) => !o && close()} title={isEdit ? 'Editar meta' : 'Nova meta'}>
+        {editing && (
+          <GoalForm
+            key={isEdit ? editing.id : 'new'}
+            initial={isEdit ? editing : {}}
+            saving={save.isPending}
+            onSubmit={(data) => save.mutate(data)}
+            onCancel={close}
+            onDelete={isEdit ? () => setConfirmDelete(true) : undefined}
+          />
+        )}
+      </FormSheet>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Excluir meta?"
+        confirmLabel="Excluir"
+        destructive
+        onConfirm={() => isEdit && remove.mutate(editing.id)}
+      />
     </div>
   );
 }
